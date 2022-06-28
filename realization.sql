@@ -1,4 +1,3 @@
-
 ---------------------------------------------------------Шаг 1----------------------------------------------------------
 /* Описание
 Создайте справочник стоимости доставки в страны shipping_country_rates из данных, 
@@ -14,6 +13,7 @@ shipping_country_base_rate - NUMERIC(14,3)
 */
 
 --создаем таблицу shipping_country_rates
+drop table if exists public.shipping_country_rates;
 CREATE TABLE public.shipping_country_rates (
 		shipping_country_id serial primary key,
 		shipping_country text,
@@ -61,11 +61,12 @@ order by 1;
 
 --Из результата запроса видно, что для agreement_number подойдет тип smallint, а для agreement_commission - float. agreement_rate - text;
 --Создаем таблицу и заполняем ее данными
+drop table if exists shipping_agreement;
 create table shipping_agreement (
 								agreementid serial primary key,
 								agreement_number text,
-								agreement_rate float,
-								agreement_commission float);
+								agreement_rate numeric(14,2),
+								agreement_commission numeric(14,2));
 
 insert into shipping_agreement (agreementid,					
 								agreement_number, 
@@ -74,8 +75,8 @@ insert into shipping_agreement (agreementid,
 								
 SELECT distinct agreement[1]::int as agreementid,
        			agreement[2]::text as agreement_number,
-       			agreement[3]::float as agreement_rate,
-       			agreement[4]::float as agreement_commission
+       			agreement[3]::numeric(14,2) as agreement_rate,
+       			agreement[4]::numeric(14,2) as agreement_commission
 FROM
   (SELECT regexp_split_to_array(vendor_agreement_description, ':+') AS agreement
    FROM shipping) AS t1
@@ -101,7 +102,7 @@ order by 1;
  --Для transfer_type и transfer_model подойдет text
  
  --Создаем и заполняем данными таблицу
- 
+drop table if exists shipping_transfer;
 create table shipping_transfer (
 								transfer_type_id serial primary key,
 								transfer_type text,
@@ -138,7 +139,7 @@ shipping_plan_datetime, payment_amount , vendorid .
 /*
 Необходимые поля и типы в таблице:
 shippingid - int8 --из таблицы shipping
-verndorid - int8 --из таблицы shipping
+vendorid - int8 --из таблицы shipping
 payment_amount - numeric(14,2) --из таблицы shipping
 shipping_plan_datetime - timestamp --из таблицы shipping
 transfer_type_id - int8 --из таблицы shipping_transfer
@@ -146,31 +147,23 @@ shipping_country_id - int8 --из таблицы shipping_country_rates
 agreementid - int8 --из таблицы shipping_agreement
 */
 
-
+drop table if exists shipping_info;
 create table shipping_info (
 							shippingid int8,
-							verndorid int8,
+							vendorid int8,
 							payment_amount numeric(14,2),
 							shipping_plan_datetime timestamp,
 							transfer_type_id int8,
 							shipping_country_id int8,
-							agreementid int8
+							agreementid int8,
+							FOREIGN KEY (transfer_type_id) REFERENCES shipping_transfer (transfer_type_id) 
+							ON UPDATE cascade,
+							FOREIGN KEY (shipping_country_id) REFERENCES shipping_country_rates (shipping_country_id) 
+							ON UPDATE cascade,
+							FOREIGN KEY (agreementid) REFERENCES shipping_agreement (agreementid) 
+                            ON UPDATE CASCADE
 						   );
---Добавляем ограничения для внешних ключей transfer_type_id/shipping_country_id/agreementid
-ALTER TABLE shipping_info 
-ADD CONSTRAINT f_transfer_type_id_fkey
-FOREIGN KEY (transfer_type_id) REFERENCES shipping_transfer (transfer_type_id) 
-ON UPDATE CASCADE; 
 
-ALTER TABLE shipping_info 
-ADD CONSTRAINT f_shipping_country_id_fkey
-FOREIGN KEY (shipping_country_id) REFERENCES shipping_country_rates (shipping_country_id) 
-ON UPDATE CASCADE; 
-
-ALTER TABLE shipping_info 
-ADD CONSTRAINT f_agreementid_fkey
-FOREIGN KEY (agreementid) REFERENCES shipping_agreement (agreementid) 
-ON UPDATE CASCADE; 
 
 --Заполняем таблицу данными
 insert into shipping_info
@@ -212,7 +205,7 @@ state - text
 shipping_start_fact_datetime - timestamp
 shipping_end_fact_datetime - timestamp
 */
-
+drop table if exists shipping_status;
 create table shipping_status
 			 (shippingid int8,
 			 status text,
@@ -255,13 +248,13 @@ where ls1.rn_desc = 1 --нас интересуют только самый по
 /*
 Создайте представление shipping_datamart на основании готовых таблиц для аналитики
 */
-
+drop view if exists shipping_datamart;
 create view shipping_datamart as
 select si.shippingid,
-	   si.verndorid,
+	   si.vendorid ,
 	   st.transfer_type,
-	   case when state = 'recieved' then extract(days from shipping_end_fact_datetime-shipping_start_fact_datetime) 
-	        end as full_day_at_shipping, --по условию не очень ясно, нужно ли отражать время по недоставленным заказам. Отталкивался от формулировки "количество полных дней, в течение которых длилась доставка"
+	   extract(days from shipping_end_fact_datetime-shipping_start_fact_datetime) 
+	         as full_day_at_shipping,
 	   case when shipping_end_fact_datetime > shipping_plan_datetime then 1 else 0 
 	        end as is_delay,
 	   case when state = 'recieved' then 1 else 0 
@@ -270,7 +263,8 @@ select si.shippingid,
 	        else 0
 	        end as delay_day_at_shipping,
 	   payment_amount,
-	   payment_amount*(scr.shipping_country_base_rate  + sa.agreement_rate  + st.shipping_transfer_rate)  as vat
+	   payment_amount*(scr.shipping_country_base_rate  + sa.agreement_rate  + st.shipping_transfer_rate)  as vat,
+	   payment_amount*agreement_commission as profit 
 from shipping_info si
 join shipping_transfer st on st.transfer_type_id  = si.transfer_type_id
 join shipping_status ss on ss.shippingid = si.shippingid
@@ -282,10 +276,3 @@ join shipping_agreement sa on sa.agreementid  = si.agreementid;
 select * 
 from shipping_datamart
 limit 10;
-
-
-
-
-
-
-
